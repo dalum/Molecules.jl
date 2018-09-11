@@ -34,7 +34,7 @@ bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Hydrogen, ::Orbital"1s", ::Orbital"1s"
 bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Carbon, ::Orbital"1s", ::Orbital"2s") = HCssσ
 bondenergy(::Val{:σ}, δr, ::Carbon, ::Hydrogen, ::Orbital"2s", ::Orbital"1s") = HCssσ
 bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Carbon, ::Orbital"1s", ::Orbital"2p_{*}") = HCspσ
-bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2p_{*}", ::Orbital"1s") = -HCspσ
+bondenergy(::Val{:σ}, δr, ::Carbon, ::Hydrogen, ::Orbital"2p_{*}", ::Orbital"1s") = -HCspσ
 
 bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2s", ::Orbital"2s") = CCssσ
 bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2s", ::Orbital"2p_{*}") = CCspσ

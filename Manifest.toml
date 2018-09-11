@@ -166,9 +166,9 @@ version = "0.5.2"
 
 [[Revise]]
 deps = ["Distributed", "FileWatching", "InteractiveUtils", "LibGit2", "OrderedCollections", "Pkg", "REPL", "Random", "Test", "UUIDs", "Unicode"]
-git-tree-sha1 = "6eca1be77272a5c07cb80b010f5f794eb041b0f6"
+git-tree-sha1 = "52b8c33ecd5b333fe54962519a18fc824c604e8c"
 uuid = "295af30f-e4ad-537b-8983-00126c2a3abe"
-version = "0.7.5"
+version = "0.7.8"
 
 [[SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
