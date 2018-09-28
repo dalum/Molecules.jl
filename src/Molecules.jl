@@ -6,6 +6,7 @@ using Unitful: Unitful,
     @unit, @u_str,
     Energy, Length, Temperature,
     eV, K
+using Unitful: ħ
 const kB = Unitful.k
 @unit Å "Å" Angstrom 0.1u"nm" false
 
@@ -19,7 +20,7 @@ using DataStructures: OrderedSet
 
 export @Orbital_str, @orbital_str,
     Å, Atom, Bond, Molecule,
-    hamiltonian, makeaxes, slaterkoster
+    chemicalpotential, hamiltonian, makeaxes, selfenergy, slaterkoster, vibrationalcoupling
 
 struct Orbital{N,L,M} end
 macro Orbital_str(str::String)
@@ -68,15 +69,15 @@ mutable struct Atom{T,SYMBOL,Z,N}
         OrderedSet(orbitals))
 end # module
 
-Atom{<:Any,SYMBOL,Z,N}(x::Length{T}, y::Length{T}, z::Length{T}, orbitals::Orbital...) where {T,SYMBOL,Z,N} = Atom{T,SYMBOL,Z,N}(
-    makeaxes(T, zero(T), zero(T)),
+Atom{<:Any,SYMBOL,Z,N}(x::Length{T}, y::Length{T}, z::Length{T}, orbitals::Orbital...; axes=makeaxes(T, zero(T), zero(T))) where {T,SYMBOL,Z,N} = Atom{T,SYMBOL,Z,N}(
+    axes,
     x,
     y,
     z,
     orbitals...)
 
-Atom{<:Any,SYMBOL,Z,N}(position::Vector{<:Length{T}}, orbitals::Orbital...) where {T,SYMBOL,Z,N} = Atom{T,SYMBOL,Z,N}(
-    makeaxes(T, zero(T), zero(T)),
+Atom{<:Any,SYMBOL,Z,N}(position::Vector{<:Length{T}}, orbitals::Orbital...; axes=makeaxes(T, zero(T), zero(T))) where {T,SYMBOL,Z,N} = Atom{T,SYMBOL,Z,N}(
+    axes,
     position...,
     orbitals...)
 
@@ -113,6 +114,15 @@ Molecule(atoms::AbstractVector{<:Atom{T}}, bonds) where T = Molecule(
     OrderedSet(atoms),
     Set(bonds))
 
+Molecule{T}() where T = Molecule(
+    SVector{3}(zero(T)*Å, zero(T)*Å, zero(T)*Å),
+    makeaxes(T, zero(T), zero(T)),
+    OrderedSet{Atom{T}}(),
+    Set{Bond}())
+
+Base.push!(mol::Molecule{T}, atoms::Atom{T}...) where T = push!(mol.atoms, atoms...)
+Base.push!(mol::Molecule, bonds::Bond...) = push!(mol.bonds, bonds...)
+
 ##################################################
 # Chemical properties
 ##################################################
@@ -120,9 +130,10 @@ Molecule(atoms::AbstractVector{<:Atom{T}}, bonds) where T = Molecule(
 protonnumber(::Atom{T,SYMBOL,Z,N}) where {T,SYMBOL,Z,N} = Z
 neutronnumber(::Atom{T,SYMBOL,Z,N}) where {T,SYMBOL,Z,N} = N
 symbol(::Atom{T,SYMBOL,Z,N}) where {T,SYMBOL,Z,N} = SYMBOL
+mass(atom::Atom) = Unitful.mp * protonnumber(atom) + Unitful.mn * neutronnumber(atom)
 
-countorbitals(atom::Atom) = length(atom.orbitals)
-countorbitals(mol::Molecule) = sum(map(countorbitals, mol.atoms))
+countorbitals(atom::Atom)::Int = length(atom.orbitals)
+countorbitals(mol::Molecule)::Int = sum(map(countorbitals, mol.atoms))
 
 function countelectrons(atom::Atom)
     n = protonnumber(atom)
@@ -131,11 +142,11 @@ function countelectrons(atom::Atom)
 end
 countelectrons(mol::Molecule) = sum(countelectrons(atom) for atom in mol.atoms)
 
-function chemicalpotential(mol::Molecule)
+function chemicalpotential(mol::Molecule)::Tuple{<:Energy, <:Energy}
     H = hamiltonian(mol)
-    n = Int(ceil(countelectrons(mol) / 2))
+    n = countelectrons(mol)
     energies = eigvals(H / 1eV) * 1eV
-    return (energies[n] + energies[n + 1]) / 2, (energies[n + 1] - energies[n]) / 2
+    return (energies[ceil(Int, n/2)] + energies[ceil(Int, (n + 1)/2)]) / 2, (energies[ceil(Int, (n + 1)/2)] - energies[ceil(Int, n/2)]) / 2
 end
 
 ##################################################
@@ -175,13 +186,23 @@ orbitals.
 
 """
 function hamiltonian(atom::Atom)
-    return [s == s′ ? onsiteenergy(atom, s) : 0.0eV for s in atom.orbitals, s′ in atom.orbitals]
+    N = countorbitals(atom)
+    H = fill(0.0eV, N, N)
+    for i in 1:N
+        H[i,i] = onsiteenergy(atom, atom.orbitals[i])
+    end
+    return H
 end
 
 function hamiltonian(atom1::Atom, atom2::Atom)
+    N1 = countorbitals(atom1)
+    N2 = countorbitals(atom2)
+    H = fill(0.0eV, N1, N2)
     δr = atom1.position - atom2.position
-    f = (val, δr, s1, s2) -> bondenergy(val, δr, atom1, atom2, s1, s2)
-    return [slaterkoster(f, δr, s1, s2) for s1 in atom1.orbitals, s2 in atom2.orbitals]
+    for i in 1:N1, j in 1:N2
+        H[i,j] = slaterkoster(bondenergy, δr, atom1, atom2, atom1.orbitals[i], atom2.orbitals[j])
+    end
+    return H
 end
 
 function hamiltonian(mol::Molecule)
@@ -227,39 +248,17 @@ function hamiltonian(mol1::Molecule, mol2::Molecule, bonds::Set{<:Bond})
     return H
 end
 
-## Slater-Koster scheme
-
-slaterkoster(f, δr::SVector{3}, s1::Orbital"*s", s2::Orbital"*s") = f(Val(:σ), norm(δr), s1, s2)
-
-for (i, x) in [(1, :(:x)), (2, :(:y)), (3, :(:z))]
-    @eval slaterkoster(f, δr::SVector{3}, s1::Orbital"*s", s2::Orbital{<:Any, :p, $x}) =
-        normalize(δr)[$i] * f(Val(:σ), norm(δr), s1, s2)
-
-    @eval slaterkoster(f, δr::SVector{3}, s1::Orbital{<:Any,:p,$x}, s2::Orbital{<:Any,:s,Nothing}) =
-        normalize(δr)[$i] * f(Val(:σ), norm(δr), s1, s2)
-
-    for (j, y) in [(1, :(:x)), (2, :(:y)), (3, :(:z))]
-        if i == j
-            @eval function slaterkoster(f, δr::SVector{3}, s1::Orbital{<:Any,:p,$x}, s2::Orbital{<:Any,:p,$x})
-                d = normalize(δr)
-                return d[$i]^2 * f(Val(:σ), norm(δr), s1, s2) + (1 - d[$i]^2) * f(Val(:π), norm(δr), s1, s2)
-            end
-        else
-            @eval function slaterkoster(f, δr::SVector{3}, s1::Orbital{<:Any,:p,$x}, s2::Orbital{<:Any,:p,$y})
-                d = normalize(δr)
-                d[$i] * d[$j] * (f(Val(:σ), norm(δr), s1, s2) - f(Val(:π), norm(δr), s1, s2))
-            end
-        end
-    end
-end
-
 include("energies.jl")
+
+function propagator(E::Energy, H0::Matrix{<:Energy}, Hs::Matrix{<:Energy}...)
+    G = fill(0.0eV^-1, size(H0)...)
+    Ginv = fill(0.0eV, size(H0)...)
+    return inv((E + im*η)*I .- H0 .+ im.*(ΓL .+ ΓR) .- λ*n*L/ħ)
+end
 
 ##################################################
 # Angular momentum
 ##################################################
-
-using Unitful: ħ
 
 angularmomentum(vec::SVector{3}, args...) =
     vec[1]*angularmomentum(:x, args...) +
@@ -310,15 +309,29 @@ nB(E::Energy, T::Temperature = 300K) = 1 / (exp(E / (kB*T)) - 1)
 nF(E::Energy, T::Temperature = 300K) = 1 / (exp(E / (kB*T)) + 1)
 
 ##################################################
-# Leads
+# Vibrations
 ##################################################
 
-# struct DensityOfStates{T}
-#     f::T
-# end
+"""
+    vibrationalcoupling(mol, atom, ω0, dr)
 
-# (dos::DensityOfStates{<:AbstractMatrix})(E) = dos.f
-# (dos::DensityOfStates{<:Function})(E) = dos.f(E)
+Calculate the numerical derivative of the `hamiltonian(mol)` w.r.t. a
+displacement along `dr` of the position of `atom`.  `ω0` is the
+characteristic frequency of the atomic vibration.
+
+"""
+function vibrationalcoupling(mol::Molecule, atom::Atom, ω0, dr)
+    m = Molecules.mass(atom)
+    H0 = hamiltonian(mol)
+    atom.position += dr
+    H′ = hamiltonian(mol)
+    atom.position -= dr
+    return (H′ - H0) / norm(dr) * √(ħ / (2 * m * ω0)) .|> eV
+end
+
+##################################################
+# Leads
+##################################################
 
 """
     Lead{N}
@@ -347,5 +360,11 @@ function selfenergy(l::Lead, mol::Molecule, bonds::Set{<:Bond})
 end
 
 selfenergy(E::Energy, l::Lead, mol::Molecule, bonds::Set{<:Bond}) = selfenergy(l, mol, bonds)(E)
+
+##################################################
+# Plots recipes
+##################################################
+
+include("recipe.jl")
 
 end #module

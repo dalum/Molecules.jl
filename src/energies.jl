@@ -21,23 +21,59 @@ const CCppπ = -(602 - 347) * Unitful.kJ / Unitful.mol / Unitful.Na |> eV
 # Onsite energies
 ##################################################
 
-onsiteenergy(::Hydrogen, ::Orbital"1s") = -13.59843449eV
-onsiteenergy(::Carbon, ::Orbital"2s") = -15.9625933eV
-onsiteenergy(::Carbon, ::Orbital"2p_{*}") = -11.2602880eV
+@inline onsiteenergy(::Hydrogen, ::Orbital"1s") = -13.59843449eV
+@inline onsiteenergy(::Carbon, ::Orbital"2s") = -15.9625933eV
+@inline onsiteenergy(::Carbon, ::Orbital"2p_{*}") = -11.2602880eV
 
 ##################################################
 # Bond energies
 ##################################################
 
-bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Hydrogen, ::Orbital"1s", ::Orbital"1s") = HHssσ
+τ = 1//1
 
-bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Carbon, ::Orbital"1s", ::Orbital"2s") = HCssσ
-bondenergy(::Val{:σ}, δr, ::Carbon, ::Hydrogen, ::Orbital"2s", ::Orbital"1s") = HCssσ
-bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Carbon, ::Orbital"1s", ::Orbital"2p_{*}") = HCspσ
-bondenergy(::Val{:σ}, δr, ::Carbon, ::Hydrogen, ::Orbital"2p_{*}", ::Orbital"1s") = -HCspσ
+@inline bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Hydrogen, ::Orbital"1s", ::Orbital"1s") = HHssσ * exp(-(δr - 1Å)/a0*τ)
 
-bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2s", ::Orbital"2s") = CCssσ
-bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2s", ::Orbital"2p_{*}") = CCspσ
-bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2p_{*}", ::Orbital"2s") = -CCspσ
-bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2p_{*}", ::Orbital"2p_{*}") = CCppσ
-bondenergy(::Val{:π}, δr, ::Carbon, ::Carbon, ::Orbital"2p_{*}", ::Orbital"2p_{*}") = CCppπ
+@inline bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Carbon, ::Orbital"1s", ::Orbital"2s") = HCssσ * exp(-8(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Hydrogen, ::Orbital"2s", ::Orbital"1s") = HCssσ * exp(-8(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Carbon, ::Orbital"1s", ::Orbital"2p_{*}") = HCspσ * exp(-8(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Hydrogen, ::Orbital"2p_{*}", ::Orbital"1s") = -HCspσ * exp(-8(δr - 1Å)/a0*τ)
+
+@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2s", ::Orbital"2s") = CCssσ * exp(-12(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2s", ::Orbital"2p_{*}") = CCspσ * exp(-12(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2p_{*}", ::Orbital"2s") = -CCspσ * exp(-12(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2p_{*}", ::Orbital"2p_{*}") = CCppσ * exp(-12(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:π}, δr, ::Carbon, ::Carbon, ::Orbital"2p_{*}", ::Orbital"2p_{*}") = CCppπ * exp(-12(δr - 1Å)/a0*τ)
+
+##################################################
+# Slater-Koster scheme
+##################################################
+
+function slaterkoster(f, δr::SVector{3}, atom1::Atom, atom2::Atom, s1::Orbital"*s", s2::Orbital"*s")
+    return f(Val(:σ), norm(δr), atom1, atom2, s1, s2)
+end
+
+for (i, x) in [(1, :(:x)), (2, :(:y)), (3, :(:z))]
+    @eval @inline function slaterkoster(f, δr::SVector{3}, atom1::Atom, atom2::Atom, s1::Orbital"*s", s2::Orbital{<:Any, :p, $x})
+        d = normalize(δr)
+        return d[$i] * f(Val(:σ), norm(δr), atom1, atom2, s1, s2)
+    end
+
+    @eval @inline function slaterkoster(f, δr::SVector{3}, atom1::Atom, atom2::Atom, s1::Orbital{<:Any,:p,$x}, s2::Orbital{<:Any,:s,Nothing})
+        d = normalize(δr)
+        return d[$i] * f(Val(:σ), norm(δr), atom1, atom2, s1, s2)
+    end
+
+    for (j, y) in [(1, :(:x)), (2, :(:y)), (3, :(:z))]
+        if i == j
+            @eval @inline function slaterkoster(f, δr::SVector{3}, atom1::Atom, atom2::Atom, s1::Orbital{<:Any,:p,$x}, s2::Orbital{<:Any,:p,$x})
+                d = normalize(δr)
+                return d[$i]^2 * f(Val(:σ), norm(δr), atom1, atom2, s1, s2) + (1 - d[$i]^2) * f(Val(:π), norm(δr), atom1, atom2, s1, s2)
+            end
+        else
+            @eval @inline function slaterkoster(f, δr::SVector{3}, atom1::Atom, atom2::Atom, s1::Orbital{<:Any,:p,$x}, s2::Orbital{<:Any,:p,$y})
+                d = normalize(δr)
+                return d[$i] * d[$j] * (f(Val(:σ), norm(δr), atom1, atom2, s1, s2) - f(Val(:π), norm(δr), atom1, atom2, s1, s2))
+            end
+        end
+    end
+end
