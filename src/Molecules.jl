@@ -1,26 +1,15 @@
 module Molecules
 
-using LinearAlgebra
-
-using Unitful: Unitful,
-    @unit, @u_str,
-    Energy, Length, Temperature,
-    eV, K
-using Unitful: ħ
-const kB = Unitful.k
-@unit Å "Å" Angstrom 0.1u"nm" false
-
-const localunits = Unitful.basefactors
-function __init__()
-    merge!(Unitful.basefactors, localunits)
-end
-
-using StaticArrays: SVector, SMatrix
 using DataStructures: OrderedSet
+using ForwardDiff
+using LinearAlgebra
+using SlaterKoster
+using StaticArrays: SVector, SMatrix
+
+import SlaterKoster: SlaterKosterTable, hamiltonian
 
 export @Orbital_str, @orbital_str,
-    Å, Atom, Bond, Molecule,
-    chemicalpotential, hamiltonian, makeaxes, selfenergy, slaterkoster, vibrationalcoupling
+    chemicalpotential, hamiltonian, makeaxes, molecularorbitals, selfenergy, slaterkoster, vibrationalcoupling
 
 struct Orbital{N,L,M} end
 macro Orbital_str(str::String)
@@ -58,28 +47,33 @@ function Base.show(io::IO, ::Orbital{N,L,M}) where {N,L,M}
     end
 end
 
-mutable struct Atom{T,SYMBOL,Z,N}
-    position::SVector{3,<:Length{T}}
-    axes::SMatrix{3,3,T}
-    orbitals::OrderedSet{<:Orbital}
+function shortform(::Orbital{N,L,M}) where {N,L,M}
+    l = L
+    m = M == Nothing ? "" : replace(string(M), r"[_^+\-{}]" => s"")
+    return Symbol("$l$m")
+end
 
-    Atom{T,SYMBOL,Z,N}(axes::SMatrix{3,3,T,9}, x::Length{T}, y::Length{T}, z::Length{T}, orbitals::Orbital...) where {T,SYMBOL,Z,N} = new{T,SYMBOL,Z,N}(
-        SVector{3}(x, y, z),
-        axes,
-        OrderedSet(orbitals))
-end # module
+mutable struct Atom{T1<:AbstractVector,T2<:AbstractMatrix,SYMBOL,Z,N}
+    position::T1
+    axes::T2
+    orbitals::OrderedSet{Orbital}
 
-Atom{<:Any,SYMBOL,Z,N}(x::Length{T}, y::Length{T}, z::Length{T}, orbitals::Orbital...; axes=makeaxes(T, zero(T), zero(T))) where {T,SYMBOL,Z,N} = Atom{T,SYMBOL,Z,N}(
-    axes,
-    x,
-    y,
-    z,
-    orbitals...)
+    function Atom{T1,T2,SYMBOL,Z,N}(position::T1, axes::T2, orbitals::Orbital...) where {T1<:AbstractVector,T2<:AbstractMatrix,SYMBOL,Z,N}
+        return new{T1,T2,SYMBOL,Z,N}(
+            position,
+            axes,
+            OrderedSet{Orbital}(orbitals))
+    end
+end
 
-Atom{<:Any,SYMBOL,Z,N}(position::Vector{<:Length{T}}, orbitals::Orbital...; axes=makeaxes(T, zero(T), zero(T))) where {T,SYMBOL,Z,N} = Atom{T,SYMBOL,Z,N}(
-    axes,
-    position...,
-    orbitals...)
+function Atom{<:Any,<:Any,SYMBOL,Z,N}(position::T1, orbitals::Orbital...; axes=makeaxes(0., 0.)) where {T1,SYMBOL,Z,N}
+    return Atom{T1,typeof(axes),SYMBOL,Z,N}(position, axes, orbitals...)
+end
+
+Base.getindex(atom::Atom, i::Integer) = collect(atom.orbitals)[i]
+
+position(atom::Atom{<:AbstractVector}) = atom.position
+position(atom::Atom{<:AbstractVector{<:ForwardDiff.Dual}}) = (x -> x.value).(atom.position)
 
 struct Bond{A1<:Atom,A2<:Atom}
     atom1::A1
@@ -95,165 +89,176 @@ struct Bond{A1<:Atom,A2<:Atom}
 end
 Bond(atom1::A1, atom2::A2) where {A1, A2} = Bond{A1,A2}(atom1, atom2)
 
-mutable struct Molecule{T}
-    position::SVector{3,<:Length{T}}
-    axes::SMatrix{3,3,T}
-    atoms::OrderedSet{<:Atom{T}}
-    bonds::Set{<:Bond}
+mutable struct Molecule{T1<:AbstractVector,T2<:AbstractMatrix}
+    position::T1
+    axes::T2
+    atoms::OrderedSet{Atom}
+    bonds::Set{Bond}
 end
 
-Molecule(atoms::OrderedSet{<:Atom{T}}, bonds) where T = Molecule(
-    SVector{3}(zero(T)*Å, zero(T)*Å, zero(T)*Å),
-    makeaxes(T, zero(T), zero(T)),
-    atoms,
+Molecule(atoms, bonds) = Molecule(
+    SVector{3}(0., 0., 0.),
+    makeaxes(0., 0.),
+    OrderedSet{Atom}(atoms),
     Set(bonds))
 
-Molecule(atoms::AbstractVector{<:Atom{T}}, bonds) where T = Molecule(
-    SVector{3}(zero(T)*Å, zero(T)*Å, zero(T)*Å),
-    makeaxes(T, zero(T), zero(T)),
-    OrderedSet(atoms),
-    Set(bonds))
-
-Molecule{T}() where T = Molecule(
-    SVector{3}(zero(T)*Å, zero(T)*Å, zero(T)*Å),
-    makeaxes(T, zero(T), zero(T)),
-    OrderedSet{Atom{T}}(),
+Molecule() = Molecule(
+    SVector{3}(0., 0., 0.),
+    makeaxes(0., 0.),
+    OrderedSet{Atom}(),
     Set{Bond}())
 
-Base.push!(mol::Molecule{T}, atoms::Atom{T}...) where T = push!(mol.atoms, atoms...)
+Base.push!(mol::Molecule, atoms::Atom...) = push!(mol.atoms, atoms...)
 Base.push!(mol::Molecule, bonds::Bond...) = push!(mol.bonds, bonds...)
+
+Base.eachindex(mol::Molecule) = eachindex(collect(mol.atoms))
+Base.iterate(mol::Molecule) = iterate(collect(mol.atoms))
+Base.iterate(mol::Molecule, i) = iterate(collect(mol.atoms), i)
+Base.getindex(mol::Molecule, i::Integer) = collect(mol.atoms)[i]
+Base.lastindex(mol::Molecule) = lastindex(collect(mol.atoms))
+
+function indices(mol::Molecule, atom::Atom)
+    N0 = 1
+    for atom′ in mol.atoms
+        N1 = N0 + countorbitals(atom′)
+        if atom === atom′
+            return N0:(N1-1)
+        end
+        N0 = N1
+    end
+    return nothing
+end
+
+function indices(mol::Molecule, atom::Atom, orbital::Orbital)
+    N0 = 1
+    for atom′ in mol.atoms
+        N1 = N0 + countorbitals(atom′)
+        if atom === atom′
+            for (i, orbital′) in enumerate(atom.orbitals)
+                if orbital == orbital′
+                    return (N0+i-1):(N0+i-1)
+                end
+            end
+            return nothing
+        end
+        N0 = N1
+    end
+    return nothing
+end
+
+Base.Vector{T}(mol::Molecule) where {T} = normalize!(fill(oneunit(T), countorbitals(mol)))
+
+function Base.Vector{T}(mol::Molecule, atom::Atom) where {T}
+    u = fill(zero(T), countorbitals(mol))
+    N = countorbitals(atom)
+    u[indices(mol, atom)] .= 1 / sqrt(N)
+    return u
+end
+
+function Base.Vector{T}(mol::Molecule, n::Integer) where {T}
+    atom = mol[n]
+    return Vector{T}(mol, atom)
+end
+
+function Base.Vector{T}(mol::Molecule, atom::Atom, orbital::Orbital) where {T}
+    u = fill(zero(T), countorbitals(mol))
+    u[indices(mol, atom, orbital)] .= 1
+    return u
+end
+
+function Base.Vector{T}(mol::Molecule, atom::Atom, s::Integer) where {T}
+    orbital = atom[s]
+    return Vector{T}(mol, atom, orbital)
+end
+
+function Base.Vector{T}(mol::Molecule, n::Integer, s::Integer) where {T}
+    atom = mol[n]
+    orbital = atom[s]
+    return Vector{T}(mol, atom, orbital)
+end
 
 ##################################################
 # Chemical properties
 ##################################################
 
-protonnumber(::Atom{T,SYMBOL,Z,N}) where {T,SYMBOL,Z,N} = Z
-neutronnumber(::Atom{T,SYMBOL,Z,N}) where {T,SYMBOL,Z,N} = N
-symbol(::Atom{T,SYMBOL,Z,N}) where {T,SYMBOL,Z,N} = SYMBOL
-mass(atom::Atom) = Unitful.mp * protonnumber(atom) + Unitful.mn * neutronnumber(atom)
+protonnumber(::Atom{T1,T2,SYMBOL,Z,N}) where {T1,T2,SYMBOL,Z,N} = Z
+neutronnumber(::Atom{T1,T2,SYMBOL,Z,N}) where {T1,T2,SYMBOL,Z,N} = N
+symbol(::Atom{T1,T2,SYMBOL,Z,N}) where {T1,T2,SYMBOL,Z,N} = SYMBOL
 
 countorbitals(atom::Atom)::Int = length(atom.orbitals)
 countorbitals(mol::Molecule)::Int = sum(map(countorbitals, mol.atoms))
 
-function countelectrons(atom::Atom)
+mass(skt::SlaterKosterTable, atom::Atom) = SlaterKoster.mass(skt, symbol(atom))
+
+function electronvalence(atom::Atom)
     n = protonnumber(atom)
     n <= 2 && return n
-    n <= 10 && return n - 2 # Not very generic ...
+    n <= 10 && return n - 2
+    n <= 18 && return n - 10 # Not very generic ...
+    n > 18 && error("atom numbers greater than 18 are currently not supported")
 end
-countelectrons(mol::Molecule) = sum(countelectrons(atom) for atom in mol.atoms)
+"""
+    valencecount(mol)
 
-function chemicalpotential(mol::Molecule)::Tuple{<:Energy, <:Energy}
-    H = hamiltonian(mol)
-    n = countelectrons(mol)
-    energies = eigvals(H / 1eV) * 1eV
-    return (energies[ceil(Int, n/2)] + energies[ceil(Int, (n + 1)/2)]) / 2, (energies[ceil(Int, (n + 1)/2)] - energies[ceil(Int, n/2)]) / 2
+Return the sum of electron valences of each atom in `mol`.
+
+"""
+valencecount(mol::Molecule, oxidation=0) = sum(electronvalence(atom) for atom in mol.atoms) - oxidation
+
+function molecularorbitals(H)
+    vals, vecs = eigen(H)
+    s = sortperm(vals)
+    return vals[s], vecs[:, s]
 end
+
+function chemicalpotential(mol::Molecule, levels, oxidation=0)
+    n = valencecount(mol, oxidation)
+    μ = real(levels[ceil(Int, n/2)] + levels[ceil(Int, (n + 1)/2)])/2
+    Δ = real(levels[ceil(Int, (n + 1)/2)] - levels[ceil(Int, n/2)])/2
+    return μ, Δ
+end
+
+include("hamiltonian.jl")
+
+include("unitcell.jl")
 
 ##################################################
 # Elements
 ##################################################
 
-const Hydrogen = Atom{<:Any, :H, 1, 0}
-const Deuterium = Atom{<:Any, :D, 1, 1}
-const Tritium = Atom{<:Any, :T, 1, 2}
-const Carbon = Atom{<:Any, :C, 6, 6}
-const Carbon13 = Atom{<:Any, :C, 6, 7}
-const Nitrogen = Atom{<:Any, :N, 7, 7}
-const Oxygen = Atom{<:Any, :O, 8, 8}
+const Hydrogen = Atom{<:Any, <:Any, :H, 1, 0}
+const Deuterium = Atom{<:Any, <:Any, :D, 1, 1}
+const Tritium = Atom{<:Any, <:Any, :T, 1, 2}
+const Carbon = Atom{<:Any, <:Any, :C, 6, 6}
+const Carbon13 = Atom{<:Any, <:Any, :C, 6, 7}
+const Nitrogen = Atom{<:Any, <:Any, :N, 7, 7}
+const Oxygen = Atom{<:Any, <:Any, :O, 8, 8}
 
 ##################################################
 # Coordinates
 ##################################################
 
-function makeaxes(::Type{T}, θ::T, ϕ::T) where T
-    R1 = LinearAlgebra.Givens(3, 1, cos(ϕ), sin(ϕ))
-    R2 = LinearAlgebra.Givens(2, 1, cos(θ), sin(θ))
-    return SMatrix{3, 3}(R2*R1*Matrix(one(T)*I, 3, 3))
+function makeaxes(θ = 0.0, ϕ = 0.0, ρ = 0.0)
+    R1 = LinearAlgebra.Givens(2, 1, cos(ρ), sin(ρ))
+    R2 = LinearAlgebra.Givens(3, 1, cos(ϕ), sin(ϕ))
+    R3 = LinearAlgebra.Givens(2, 1, cos(θ), sin(θ))
+    return SMatrix{3, 3}(R3*(R2*(R1*Matrix(I, 3, 3))))
 end
 
 ##################################################
-# Hamiltonians
+# Basis change
 ##################################################
 
-"""
-    hamiltonian(x)
+localbasis(atom::Atom) = localbasis(atom.axes, atom.orbitals...)
 
-Construct the matrix corresponding to the hamiltonian operator of `x`,
-where `x` is an atom, bond or molecule.  For bonds, this will compute
-the overlap integrals using the Slater-Koster scheme, for atoms, it
-will return a diagonal matrix with the onsite energies of the
-orbitals.
-
-"""
-function hamiltonian(atom::Atom)
-    N = countorbitals(atom)
-    H = fill(0.0eV, N, N)
-    for i in 1:N
-        H[i,i] = onsiteenergy(atom, atom.orbitals[i])
-    end
-    return H
+function localbasis(axes::AbstractMatrix{T}, ::Orbital"*s") where {T}
+    return fill(one(T), 1, 1)
 end
 
-function hamiltonian(atom1::Atom, atom2::Atom)
-    N1 = countorbitals(atom1)
-    N2 = countorbitals(atom2)
-    H = fill(0.0eV, N1, N2)
-    δr = atom1.position - atom2.position
-    for i in 1:N1, j in 1:N2
-        H[i,j] = slaterkoster(bondenergy, δr, atom1, atom2, atom1.orbitals[i], atom2.orbitals[j])
-    end
-    return H
-end
-
-function hamiltonian(mol::Molecule)
-    N = countorbitals(mol)
-    H = fill(0.0eV, N, N)
-
-    i = 1
-    for atom1 in mol.atoms
-        j = 1
-        Ni = countorbitals(atom1)
-        for atom2 in mol.atoms
-            Nj = countorbitals(atom2)
-            if atom1 === atom2
-                H[i:i+Ni-1, j:j+Nj-1] = hamiltonian(atom1)
-            elseif Bond(atom1, atom2) in mol.bonds
-                H[i:i+Ni-1, j:j+Nj-1] = hamiltonian(atom1, atom2)
-            end
-            j += Nj
-        end
-        i += Ni
-    end
-    return H
-end
-
-function hamiltonian(mol1::Molecule, mol2::Molecule, bonds::Set{<:Bond})
-    N1 = countorbitals(mol1)
-    N2 = countorbitals(mol2)
-    H = fill(0.0eV, N1, N2)
-
-    i = 1
-    for atom1 in mol1.atoms
-        j = 1
-        Ni = countorbitals(atom1)
-        for atom2 in mol2.atoms
-            Nj = countorbitals(atom2)
-            if Bond(atom1, atom2) in bonds
-                H[i:i+Ni-1, j:j+Nj-1] = hamiltonian(atom1, atom2)
-            end
-            j += Nj
-        end
-        i += Ni
-    end
-    return H
-end
-
-include("energies.jl")
-
-function propagator(E::Energy, H0::Matrix{<:Energy}, Hs::Matrix{<:Energy}...)
-    G = fill(0.0eV^-1, size(H0)...)
-    Ginv = fill(0.0eV, size(H0)...)
-    return inv((E + im*η)*I .- H0 .+ im.*(ΓL .+ ΓR) .- λ*n*L/ħ)
+function localbasis(axes::AbstractMatrix{T}, ::Orbital"*s", ::Orbital"*p_x", ::Orbital"*p_y", ::Orbital"*p_z") where {T}
+    Z = zero(T) / oneunit(T)
+    return [one(T) fill(Z, 1, 3)
+            fill(Z, 3, 1) axes]
 end
 
 ##################################################
@@ -267,29 +272,30 @@ angularmomentum(vec::SVector{3}, args...) =
 
 angularmomentum(x::Symbol, args...) = angularmomentum(Val(x), args...)
 
-angularmomentum(::Val, ::Orbital"*s", ::Orbital"*s") = 0.0ħ
-angularmomentum(::Val, ::Orbital"*p_{*}", ::Orbital"*s") = 0.0ħ
-angularmomentum(::Val, ::Orbital"*s", ::Orbital"*p_{*}") = 0.0ħ
-angularmomentum(::Val, ::Orbital"*p_{*}", ::Orbital"*p_{*}") = 0.0ħ
-angularmomentum(::Val{:x}, ::Orbital"*p_y", ::Orbital"*p_z") = -im*ħ
-angularmomentum(::Val{:x}, ::Orbital"*p_z", ::Orbital"*p_y") = im*ħ
-angularmomentum(::Val{:y}, ::Orbital"*p_z", ::Orbital"*p_x") = -im*ħ
-angularmomentum(::Val{:y}, ::Orbital"*p_x", ::Orbital"*p_z") = im*ħ
-angularmomentum(::Val{:z}, ::Orbital"*p_x", ::Orbital"*p_y") = -im*ħ
-angularmomentum(::Val{:z}, ::Orbital"*p_y", ::Orbital"*p_x") = im*ħ
+angularmomentum(::Val, ::Orbital"*s", ::Orbital"*s") = 0.0
+angularmomentum(::Val, ::Orbital"*p_{*}", ::Orbital"*s") = 0.0
+angularmomentum(::Val, ::Orbital"*s", ::Orbital"*p_{*}") = 0.0
+angularmomentum(::Val, ::Orbital"*p_{*}", ::Orbital"*p_{*}") = 0.0
+angularmomentum(::Val{:x}, ::Orbital"*p_y", ::Orbital"*p_z") = -im
+angularmomentum(::Val{:x}, ::Orbital"*p_z", ::Orbital"*p_y") = im
+angularmomentum(::Val{:y}, ::Orbital"*p_z", ::Orbital"*p_x") = -im
+angularmomentum(::Val{:y}, ::Orbital"*p_x", ::Orbital"*p_z") = im
+angularmomentum(::Val{:z}, ::Orbital"*p_x", ::Orbital"*p_y") = -im
+angularmomentum(::Val{:z}, ::Orbital"*p_y", ::Orbital"*p_x") = im
 
 function angularmomentum(val::Val, atom::Atom)
     N = countorbitals(atom)
-    L = fill(0.0im*ħ, N, N)
-    for j in 1:N, i in 1:N
-        L[i, j] = angularmomentum(val, atom.orbitals[i], atom.orbitals[j])
+    U = localbasis(atom)
+    L = fill(0.0im, N, N)
+    for (j, s2) in enumerate(atom.orbitals), (i, s1) in enumerate(atom.orbitals)
+        L[i, j] = angularmomentum(val, s1, s2)
     end
-    return L
+    return U'L*U
 end
 
 function angularmomentum(val::Val, mol::Molecule)
     N = countorbitals(mol)
-    L = fill(0.0im*ħ, N, N)
+    L = fill(0.0im, N, N)
 
     i = 1
     for atom in mol.atoms
@@ -301,12 +307,21 @@ function angularmomentum(val::Val, mol::Molecule)
     return L
 end
 
+function angularmomentum(val::Val, mol::Molecule, n)
+    N = countorbitals(mol)
+    L = fill(0.0im, N, N)
+    inds = indices(mol, mol[n])
+    L[inds, inds] = angularmomentum(val, mol[n])
+    return L
+end
+
 ##################################################
 # Distribution functions
 ##################################################
 
-nB(E::Energy, T::Temperature = 300K) = 1 / (exp(E / (kB*T)) - 1)
-nF(E::Energy, T::Temperature = 300K) = 1 / (exp(E / (kB*T)) + 1)
+# In atomic units, room temperature is 300K / 315774K = 9.5e-4
+nB(E, T = 9.5e-4) = 1/(exp(E/T) - 1)
+nF(E, T = 9.5e-4) = 1/(exp(E/T) + 1)
 
 ##################################################
 # Vibrations
@@ -326,7 +341,7 @@ function vibrationalcoupling(mol::Molecule, atom::Atom, ω0, dr)
     atom.position += dr
     H′ = hamiltonian(mol)
     atom.position -= dr
-    return (H′ - H0) / norm(dr) * √(ħ / (2 * m * ω0)) .|> eV
+    return (H′ - H0) / norm(dr) * √(1 / (2 * m * ω0))
 end
 
 ##################################################
@@ -340,8 +355,8 @@ A lead with `N` channels.
 
 """
 struct Lead{T}
-    mol::Molecule{T}
-    Γ::Energy{T}
+    mol::Molecule
+    Γ::T
 end
 
 """
@@ -350,16 +365,18 @@ end
 Return the self-energy to `mol` from the lead, `l`.
 """
 
-function selfenergy(l::Lead, mol::Molecule, bonds::Set{<:Bond})
-    t = hamiltonian(l.mol, mol, bonds)
-    H = hamiltonian(l.mol)
-    return function (E::Energy)
-        G = (E*I - H + I*im*l.Γ/2)^-1
+function selfenergy(l::Lead, H::AbstractMatrix, t::AbstractMatrix)
+    return function (E)
+        G = inv(E*I - H + I*im*l.Γ/2)
         return t'G*t
     end
 end
 
-selfenergy(E::Energy, l::Lead, mol::Molecule, bonds::Set{<:Bond}) = selfenergy(l, mol, bonds)(E)
+function selfenergy(T, skt::SlaterKosterTable, l::Lead, mol::Molecule, bonds::Set{<:Bond}; f=identity)
+    t = f.(hamiltonian(T, skt, l.mol, mol, bonds))
+    H = f.(hamiltonian(T, skt, l.mol))
+    return selfenergy(l, H, t)
+end
 
 ##################################################
 # Plots recipes

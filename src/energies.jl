@@ -29,17 +29,17 @@ const CCppπ = -(602 - 347) * Unitful.kJ / Unitful.mol / Unitful.Na |> eV
 # Bond energies
 ##################################################
 
-τ = 1//1
+τ = 0//1
 
-@inline bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Hydrogen, ::Orbital"1s", ::Orbital"1s") = HHssσ * exp(-(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Hydrogen, ::Orbital"1s", ::Orbital"1s") = 2*HHssσ * exp(-(δr - 1Å)/a0*τ)
 
-@inline bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Carbon, ::Orbital"1s", ::Orbital"2s") = HCssσ * exp(-8(δr - 1Å)/a0*τ)
-@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Hydrogen, ::Orbital"2s", ::Orbital"1s") = HCssσ * exp(-8(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Carbon, ::Orbital"1s", ::Orbital"2s") = 2*HCssσ * exp(-8(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Hydrogen, ::Orbital"2s", ::Orbital"1s") = 2*HCssσ * exp(-8(δr - 1Å)/a0*τ)
 @inline bondenergy(::Val{:σ}, δr, ::Hydrogen, ::Carbon, ::Orbital"1s", ::Orbital"2p_{*}") = HCspσ * exp(-8(δr - 1Å)/a0*τ)
 @inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Hydrogen, ::Orbital"2p_{*}", ::Orbital"1s") = -HCspσ * exp(-8(δr - 1Å)/a0*τ)
 
-@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2s", ::Orbital"2s") = CCssσ * exp(-12(δr - 1Å)/a0*τ)
-@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2s", ::Orbital"2p_{*}") = CCspσ * exp(-12(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2s", ::Orbital"2s") = 2*CCssσ * exp(-12(δr - 1Å)/a0*τ)
+@inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2s", ::Orbital"2p_{*}") = 2*CCspσ * exp(-12(δr - 1Å)/a0*τ)
 @inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2p_{*}", ::Orbital"2s") = -CCspσ * exp(-12(δr - 1Å)/a0*τ)
 @inline bondenergy(::Val{:σ}, δr, ::Carbon, ::Carbon, ::Orbital"2p_{*}", ::Orbital"2p_{*}") = CCppσ * exp(-12(δr - 1Å)/a0*τ)
 @inline bondenergy(::Val{:π}, δr, ::Carbon, ::Carbon, ::Orbital"2p_{*}", ::Orbital"2p_{*}") = CCppπ * exp(-12(δr - 1Å)/a0*τ)
