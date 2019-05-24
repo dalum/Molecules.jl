@@ -11,6 +11,13 @@ import SlaterKoster: SlaterKosterTable, hamiltonian
 export @Orbital_str, @orbital_str,
     chemicalpotential, hamiltonian, makeaxes, molecularorbitals, selfenergy, slaterkoster, vibrationalcoupling
 
+const σ = Dict{Union{Symbol,Int},Matrix{Complex{Float64}}}()
+const σ[0] = [1.0 0.0; 0.0 1.0]
+const σ[:x] = [0.0 1.0; 1.0 0.0]
+const σ[:y] = [0.0 -1.0im; 1.0im 0.0]
+const σ[:z] = [1.0 0.0; 0.0 -1.0]
+const ⊗ = kron
+
 struct Orbital{N,L,M} end
 macro Orbital_str(str::String)
     reg = r"^([0-9\*]+)([a-zA-Z]+)(?:_(?:\{(.+)\}|([a-zA-Z]+)))?$"
@@ -256,10 +263,55 @@ function localbasis(axes::AbstractMatrix{T}, ::Orbital"*s") where {T}
 end
 
 function localbasis(axes::AbstractMatrix{T}, ::Orbital"*s", ::Orbital"*p_x", ::Orbital"*p_y", ::Orbital"*p_z") where {T}
+    #return one(Matrix{T}(undef, 4, 4))
     Z = zero(T) / oneunit(T)
     return [one(T) fill(Z, 1, 3)
             fill(Z, 3, 1) axes]
 end
+
+##################################################
+# Position operator
+##################################################
+
+_position(::Val{:x}, atom::Atom) = atom.position[1]
+_position(::Val{:y}, atom::Atom) = atom.position[2]
+_position(::Val{:z}, atom::Atom) = atom.position[3]
+
+position(x::Symbol, args...) = position(Val(x), args...)
+
+position(::Val, s1::Orbital, s2::Orbital) = s1 == s2 ? 1.0 : 0.0
+
+function position(val::Val, atom::Atom)
+    N = countorbitals(atom)
+    U = localbasis(atom)
+    X = fill(0.0im, N, N)
+    for (j, s2) in enumerate(atom.orbitals), (i, s1) in enumerate(atom.orbitals)
+        X[i, j] = _position(val, atom) * position(val, s1, s2)
+    end
+    return U'X*U
+end
+
+function position(val::Val, mol::Molecule)
+    N = countorbitals(mol)
+    X = fill(0.0im, N, N)
+
+    i = 1
+    for atom in mol.atoms
+        Ni = countorbitals(atom)
+        X[i:i+Ni-1, i:i+Ni-1] = position(val, atom)
+        i += Ni
+    end
+
+    return X
+end
+
+# function position(val::Val, mol::Molecule, n)
+#     N = countorbitals(mol)
+#     X = fill(0.0im, N, N)
+#     inds = indices(mol, mol[n])
+#     X[inds, inds] = position(val, mol[n])
+#     return X
+# end
 
 ##################################################
 # Angular momentum
@@ -314,6 +366,26 @@ function angularmomentum(val::Val, mol::Molecule, n)
     L[inds, inds] = angularmomentum(val, mol[n])
     return L
 end
+
+##################################################
+# 
+##################################################
+
+# function inlocalbasis(x::Int, op, atom::Atom)
+#     N = countorbitals(atom)
+#     U = localbasis(atom)
+#     op = U*op
+#     L = fill(0.0im, N, N)
+#     for (j, s2) in enumerate(atom.orbitals), (i, s1) in enumerate(atom.orbitals)
+#         L[i, j] = angularmomentum(val, s1, s2)
+#     end
+#     return U'L*U
+# end
+
+
+# function inlocalbasis(x::Int, op, mol::Molecule)
+    
+# end
 
 ##################################################
 # Distribution functions
@@ -383,5 +455,6 @@ end
 ##################################################
 
 include("recipe.jl")
+include("blender.jl")
 
 end #module

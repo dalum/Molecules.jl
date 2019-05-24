@@ -15,12 +15,13 @@ orbitals.
 function hamiltonian(T::Type, skt::SlaterKosterTable, atom::Atom; electric_field=(x, y, z) -> 0.0, kwargs...)
     N = countorbitals(atom)
     f = electric_field(position(atom)...)
+    #f = 0
     H = fill(zero(T), N, N)
     U = localbasis(atom)
     for (i, s1) in enumerate(atom.orbitals)
-        H[i,i] += -f + SlaterKoster.hamiltonian(skt, symbol(atom) => shortform(s1))
+        H[i,i] += SlaterKoster.hamiltonian(skt, symbol(atom) => shortform(s1))
     end
-    return U'H*U
+    return U'H*U - I*f
 end
 
 function hamiltonian(T::Type, skt::SlaterKosterTable, atom1::Atom, atom2::Atom; fixed_distance=nothing, kwargs...)
