@@ -1,6 +1,5 @@
 module Molecules
 
-using DataStructures: OrderedSet
 using ForwardDiff
 using LinearAlgebra
 using SlaterKoster
@@ -63,13 +62,13 @@ end
 mutable struct Atom{T1<:AbstractVector,T2<:AbstractMatrix,SYMBOL,Z,N}
     position::T1
     axes::T2
-    orbitals::OrderedSet{Orbital}
+    orbitals::Vector{Orbital}
 
     function Atom{T1,T2,SYMBOL,Z,N}(position::T1, axes::T2, orbitals::Orbital...) where {T1<:AbstractVector,T2<:AbstractMatrix,SYMBOL,Z,N}
         return new{T1,T2,SYMBOL,Z,N}(
             position,
             axes,
-            OrderedSet{Orbital}(orbitals))
+            collect(orbitals))
     end
 end
 
@@ -99,20 +98,20 @@ Bond(atom1::A1, atom2::A2) where {A1, A2} = Bond{A1,A2}(atom1, atom2)
 mutable struct Molecule{T1<:AbstractVector,T2<:AbstractMatrix}
     position::T1
     axes::T2
-    atoms::OrderedSet{Atom}
+    atoms::Vector{Atom}
     bonds::Set{Bond}
 end
 
 Molecule(atoms, bonds) = Molecule(
     SVector{3}(0., 0., 0.),
     makeaxes(0., 0.),
-    OrderedSet{Atom}(atoms),
+    collect(atoms),
     Set(bonds))
 
 Molecule() = Molecule(
     SVector{3}(0., 0., 0.),
     makeaxes(0., 0.),
-    OrderedSet{Atom}(),
+    Vector{Atom}(),
     Set{Bond}())
 
 Base.push!(mol::Molecule, atoms::Atom...) = push!(mol.atoms, atoms...)
