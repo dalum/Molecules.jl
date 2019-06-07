@@ -358,7 +358,15 @@ function angularmomentum(val::Val, mol::Molecule)
     return L
 end
 
-function angularmomentum(val::Val, mol::Molecule, n)
+function angularmomentum(val::Val, mol::Molecule, atom::Atom)
+    N = countorbitals(mol)
+    L = fill(0.0im, N, N)
+    inds = indices(mol, atom)
+    L[inds, inds] = angularmomentum(val, atom)
+    return L
+end
+
+function angularmomentum(val::Val, mol::Molecule, n::Int)
     N = countorbitals(mol)
     L = fill(0.0im, N, N)
     inds = indices(mol, mol[n])
