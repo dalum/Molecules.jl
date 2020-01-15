@@ -3,23 +3,17 @@ module Molecules
 using ForwardDiff
 using LinearAlgebra
 using SlaterKoster
-using StaticArrays: SVector, SMatrix
 
 import SlaterKoster: SlaterKosterTable, hamiltonian
+import AbstractAtoms: chemical_symbols, atomic_positions
 
 export @Orbital_str, @orbital_str,
-    chemicalpotential, hamiltonian, makeaxes, molecularorbitals, selfenergy, slaterkoster, vibrationalcoupling
-
-const σ = Dict{Union{Symbol,Int},Matrix{Complex{Float64}}}()
-const σ[0] = [1.0 0.0; 0.0 1.0]
-const σ[:x] = [0.0 1.0; 1.0 0.0]
-const σ[:y] = [0.0 -1.0im; 1.0im 0.0]
-const σ[:z] = [1.0 0.0; 0.0 -1.0]
-const ⊗ = kron
+    chemicalpotential, hamiltonian, makeaxes, molecularorbitals, overlap,
+    selfenergy, slaterkoster, vibrationalcoupling
 
 struct Orbital{N,L,M} end
 macro Orbital_str(str::String)
-    reg = r"^([0-9\*]+)([a-zA-Z]+)(?:_(?:\{(.+)\}|([a-zA-Z]+)))?$"
+    reg = r"^([0-9\*]+)([a-zA-Z]+)(?:_(?:\{(.+)\}|([a-zA-Z\*]+)))?$"
     m = match(reg, str)
     m === nothing && error("Invalid orbital")
     N = m[1] === nothing ? error("Invalid orbital") : m[1] == "*" ? nothing : parse(Int, m[1])
@@ -59,27 +53,39 @@ function shortform(::Orbital{N,L,M}) where {N,L,M}
     return Symbol("$l$m")
 end
 
-mutable struct Atom{T1<:AbstractVector,T2<:AbstractMatrix,SYMBOL,Z,N}
-    position::T1
-    axes::T2
-    orbitals::Vector{Orbital}
+mutable struct Atom{SYMBOL,Z,N}
+    position
+    axes
+    valence::Union{Int,Missing}
+    orbitals
 
-    function Atom{T1,T2,SYMBOL,Z,N}(position::T1, axes::T2, orbitals::Orbital...) where {T1<:AbstractVector,T2<:AbstractMatrix,SYMBOL,Z,N}
-        return new{T1,T2,SYMBOL,Z,N}(
+    function Atom{SYMBOL,Z,N}(position, axes, valence, orbitals::Orbital...) where {SYMBOL,Z,N}
+        return new{SYMBOL,Z,N}(
             position,
             axes,
-            collect(orbitals))
+            valence,
+            orbitals
+        )
     end
 end
 
-function Atom{<:Any,<:Any,SYMBOL,Z,N}(position::T1, orbitals::Orbital...; axes=makeaxes(0., 0.)) where {T1,SYMBOL,Z,N}
-    return Atom{T1,typeof(axes),SYMBOL,Z,N}(position, axes, orbitals...)
+function Atom{SYMBOL,Z,N}(position, orbitals::Orbital...; valence=missing, axes=makeaxes(0., 0.)) where {SYMBOL,Z,N}
+    return Atom{SYMBOL,Z,N}(position, axes, valence, orbitals...)
+end
+
+Base.:(==)(atom1::Atom, atom2::Atom) = false
+function Base.:(==)(atom1::T, atom2::T) where {T <: Atom}
+    return (
+        atom1.position == atom2.position &&
+        atom1.orbitals == atom2.orbitals &&
+        isequal(atom1.valence, atom2.valence)
+    )
 end
 
 Base.getindex(atom::Atom, i::Integer) = collect(atom.orbitals)[i]
 
-position(atom::Atom{<:AbstractVector}) = atom.position
-position(atom::Atom{<:AbstractVector{<:ForwardDiff.Dual}}) = (x -> x.value).(atom.position)
+position(atom::Atom) = atom.position
+atomic_positions(atoms::AbstractVector{<:Atom}) = position.(atoms)
 
 struct Bond{A1<:Atom,A2<:Atom}
     atom1::A1
@@ -95,24 +101,33 @@ struct Bond{A1<:Atom,A2<:Atom}
 end
 Bond(atom1::A1, atom2::A2) where {A1, A2} = Bond{A1,A2}(atom1, atom2)
 
-mutable struct Molecule{T1<:AbstractVector,T2<:AbstractMatrix}
-    position::T1
-    axes::T2
+mutable struct Molecule
+    position
+    axes
     atoms::Vector{Atom}
     bonds::Set{Bond}
 end
 
 Molecule(atoms, bonds) = Molecule(
-    SVector{3}(0., 0., 0.),
+    [0., 0., 0.],
     makeaxes(0., 0.),
-    collect(atoms),
-    Set(bonds))
+    collect(Atom, atoms),
+    Set{Bond}(bonds))
 
 Molecule() = Molecule(
-    SVector{3}(0., 0., 0.),
+    [0., 0., 0.],
     makeaxes(0., 0.),
     Vector{Atom}(),
     Set{Bond}())
+
+function Base.:(==)(mol1::Molecule, mol2::Molecule)
+    return (
+        mol1.position == mol2.position &&
+        length(mol1.atoms) == length(mol2.atoms) &&
+        all(atom1 -> any(atom2 -> atom1 == atom2, mol2.atoms), mol1.atoms) &&
+        all(atom2 -> any(atom1 -> atom1 == atom2, mol1.atoms), mol2.atoms)
+    )
+end
 
 Base.push!(mol::Molecule, atoms::Atom...) = push!(mol.atoms, atoms...)
 Base.push!(mol::Molecule, bonds::Bond...) = push!(mol.bonds, bonds...)
@@ -120,6 +135,7 @@ Base.push!(mol::Molecule, bonds::Bond...) = push!(mol.bonds, bonds...)
 Base.eachindex(mol::Molecule) = eachindex(collect(mol.atoms))
 Base.iterate(mol::Molecule) = iterate(collect(mol.atoms))
 Base.iterate(mol::Molecule, i) = iterate(collect(mol.atoms), i)
+Base.length(mol::Molecule) = length(mol.atoms)
 Base.getindex(mol::Molecule, i::Integer) = collect(mol.atoms)[i]
 Base.lastindex(mol::Molecule) = lastindex(collect(mol.atoms))
 
@@ -183,20 +199,35 @@ function Base.Vector{T}(mol::Molecule, n::Integer, s::Integer) where {T}
     return Vector{T}(mol, atom, orbital)
 end
 
+function centre_of_mass(skt::SlaterKosterTable, mol::Molecule)
+    return sum(mass(skt, atom)*position(atom) for atom in mol) / mass(skt, mol)
+end
+
+function balance_position!(skt::SlaterKosterTable, mol::Molecule)
+    p0 = centre_of_mass(skt, mol)
+    for atom in mol.atoms
+        atom.position -= p0
+    end
+    return mol
+end
+
 ##################################################
 # Chemical properties
 ##################################################
 
-protonnumber(::Atom{T1,T2,SYMBOL,Z,N}) where {T1,T2,SYMBOL,Z,N} = Z
-neutronnumber(::Atom{T1,T2,SYMBOL,Z,N}) where {T1,T2,SYMBOL,Z,N} = N
-symbol(::Atom{T1,T2,SYMBOL,Z,N}) where {T1,T2,SYMBOL,Z,N} = SYMBOL
+protonnumber(::Atom{SYMBOL,Z,N}) where {SYMBOL,Z,N} = Z
+neutronnumber(::Atom{SYMBOL,Z,N}) where {SYMBOL,Z,N} = N
+chemical_symbol(::Atom{SYMBOL,Z,N}) where {SYMBOL,Z,N} = SYMBOL
+chemical_symbols(atoms::AbstractVector{<:Atom}) = chemical_symbol.(atoms)
 
 countorbitals(atom::Atom)::Int = length(atom.orbitals)
 countorbitals(mol::Molecule)::Int = sum(map(countorbitals, mol.atoms))
 
-mass(skt::SlaterKosterTable, atom::Atom) = SlaterKoster.mass(skt, symbol(atom))
+mass(skt::SlaterKosterTable, atom::Atom) = SlaterKoster.mass(skt, chemical_symbol(atom))
+mass(skt::SlaterKosterTable, mol::Molecule) = sum(map(atom -> mass(skt, atom), mol))
 
 function electronvalence(atom::Atom)
+    !ismissing(atom.valence) && return atom.valence
     n = protonnumber(atom)
     n <= 2 && return n
     n <= 10 && return n - 2
@@ -224,7 +255,14 @@ function chemicalpotential(mol::Molecule, levels, oxidation=0)
     return μ, Δ
 end
 
+bond_length(bond::Bond) = norm(position(bond.atom2) - position(bond.atom1))
+
+##################################################
+# Hamiltonians
+##################################################
+
 include("hamiltonian.jl")
+include("overlap.jl")
 
 include("unitcell.jl")
 
@@ -232,13 +270,22 @@ include("unitcell.jl")
 # Elements
 ##################################################
 
-const Hydrogen = Atom{<:Any, <:Any, :H, 1, 0}
-const Deuterium = Atom{<:Any, <:Any, :D, 1, 1}
-const Tritium = Atom{<:Any, <:Any, :T, 1, 2}
-const Carbon = Atom{<:Any, <:Any, :C, 6, 6}
-const Carbon13 = Atom{<:Any, <:Any, :C, 6, 7}
-const Nitrogen = Atom{<:Any, <:Any, :N, 7, 7}
-const Oxygen = Atom{<:Any, <:Any, :O, 8, 8}
+chemical_symbol_to_atom_type(x::Symbol) = chemical_symbol_to_atom_type(Val(x))
+
+const Hydrogen = Atom{:H, 1, 0}
+Hydrogen(position; valence=1, kwargs...) = Hydrogen(position, orbital"1s"; valence=valence, kwargs...)
+chemical_symbol_to_atom_type(::Val{:H}) = Hydrogen
+
+const Deuterium = Atom{:D, 1, 1}
+const Tritium = Atom{:T, 1, 2}
+
+const Carbon = Atom{:C, 6, 6}
+Carbon(position; valence=4, kwargs...) = Carbon(position, orbital"2s", orbital"2p_x", orbital"2p_y", orbital"2p_z"; valence=valence, kwargs...)
+chemical_symbol_to_atom_type(::Val{:C}) = Carbon
+
+const Carbon13 = Atom{:C, 6, 7}
+const Nitrogen = Atom{:N, 7, 7}
+const Oxygen = Atom{:O, 8, 8}
 
 ##################################################
 # Coordinates
@@ -248,7 +295,7 @@ function makeaxes(θ = 0.0, ϕ = 0.0, ρ = 0.0)
     R1 = LinearAlgebra.Givens(2, 1, cos(ρ), sin(ρ))
     R2 = LinearAlgebra.Givens(3, 1, cos(ϕ), sin(ϕ))
     R3 = LinearAlgebra.Givens(2, 1, cos(θ), sin(θ))
-    return SMatrix{3, 3}(R3*(R2*(R1*Matrix(I, 3, 3))))
+    return R3*(R2*(R1*Matrix(I, 3, 3)))
 end
 
 ##################################################
@@ -262,10 +309,14 @@ function localbasis(axes::AbstractMatrix{T}, ::Orbital"*s") where {T}
 end
 
 function localbasis(axes::AbstractMatrix{T}, ::Orbital"*s", ::Orbital"*p_x", ::Orbital"*p_y", ::Orbital"*p_z") where {T}
-    #return one(Matrix{T}(undef, 4, 4))
     Z = zero(T) / oneunit(T)
     return [one(T) fill(Z, 1, 3)
             fill(Z, 3, 1) axes]
+end
+
+function localbasis(axes::AbstractMatrix{T}, ::Orbital"*p_x", ::Orbital"*p_y") where {T}
+    Z = zero(T) / oneunit(T)
+    return axes[1:2,1:2]
 end
 
 ##################################################
@@ -316,7 +367,7 @@ end
 # Angular momentum
 ##################################################
 
-angularmomentum(vec::SVector{3}, args...) =
+angularmomentum(vec::AbstractVector, args...) =
     vec[1]*angularmomentum(:x, args...) +
     vec[2]*angularmomentum(:y, args...) +
     vec[3]*angularmomentum(:z, args...)
@@ -375,24 +426,27 @@ function angularmomentum(val::Val, mol::Molecule, n::Int)
 end
 
 ##################################################
-# 
+# Symmetries
 ##################################################
 
-# function inlocalbasis(x::Int, op, atom::Atom)
-#     N = countorbitals(atom)
-#     U = localbasis(atom)
-#     op = U*op
-#     L = fill(0.0im, N, N)
-#     for (j, s2) in enumerate(atom.orbitals), (i, s1) in enumerate(atom.orbitals)
-#         L[i, j] = angularmomentum(val, s1, s2)
-#     end
-#     return U'L*U
-# end
+abstract type AbstractSymmetry end
+struct Mirror{S} <: AbstractSymmetry end
 
+parity(::Mirror{:X}, ::Orbital"*s") = 1.0
+parity(::Mirror{:X}, ::Orbital"*p_*") = 1.0
+parity(::Mirror{:X}, ::Orbital"*p_x") = -1.0
 
-# function inlocalbasis(x::Int, op, mol::Molecule)
-    
-# end
+parity(::Mirror{:Y}, ::Orbital"*s") = 1.0
+parity(::Mirror{:Y}, ::Orbital"*p_*") = 1.0
+parity(::Mirror{:Y}, ::Orbital"*p_y") = -1.0
+
+parity(::Mirror{:Z}, ::Orbital"*s") = 1.0
+parity(::Mirror{:Z}, ::Orbital"*p_*") = 1.0
+parity(::Mirror{:Z}, ::Orbital"*p_z") = -1.0
+
+(s::Mirror)(a::T) where {T <: Atom} = T(s(a.position), a.orbitals...; valence=a.valence, axes=a.axes)
+
+(s::Mirror{:X})(v::T) where {T <: AbstractVector} = convert(T, [-v[1], v[2], v[3]])
 
 ##################################################
 # Distribution functions
@@ -463,5 +517,6 @@ end
 
 include("recipe.jl")
 include("blender.jl")
+include("xyz.jl")
 
 end #module

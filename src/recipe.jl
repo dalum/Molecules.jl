@@ -176,9 +176,9 @@ end
                         push!(xs, x - a[1, idx], x + a[1, idx])
                         push!(ys, y - a[2, idx], y + a[2, idx])
                         push!(zs, z - a[3, idx], z + a[3, idx])
-                        for _ in 1:2
+                        for c in 0:1
                             push!(markersize, unitradius*abs(weights[i]))
-                            push!(markercolor, HSV(180/π*angle(weights[i]), 1, 1))
+                            push!(markercolor, HSV(180c + 180/π*angle(weights[i]), 1, 1))
                         end
                     end
                 end

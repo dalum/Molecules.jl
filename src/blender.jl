@@ -7,9 +7,13 @@ function writetoblenderscript(mol::Molecule, filename)
     lines = String[]
     push!(lines, "import bpy", "import numpy")
 
+    for element in ("Hydrogen", "Carbon", "Nitrogen", "Oxygen")
+        push!(lines, """$(lowercase(element))_material = bpy.data.materials.new(name='$(element)Material')""")
+    end
+
     for atom in mol.atoms
         x, y, z = position(atom)
-        push!(lines, "bpy.ops.mesh.primitive_uv_sphere_add(size=$(radius(atom)), location=($x, $y, $z))")
+        push!(lines, """bpy.ops.mesh.primitive_uv_sphere_add(radius=$(radius(atom)), location=($x, $y, $z))""")
     end
 
     for bond in mol.bonds
@@ -20,7 +24,7 @@ function writetoblenderscript(mol::Molecule, filename)
         θ = π/2 - atan(δ[3], sqrt(δ[1]^2 + δ[2]^2))
         ϕ = atan(δ[2], δ[1])
 
-        push!(lines, "bpy.ops.mesh.primitive_cylinder_add(depth=$(norm(δ)), radius=0.1, location=($x, $y, $z), rotation=(0.0, $θ, $ϕ))")
+        push!(lines, """bpy.ops.mesh.primitive_cylinder_add(depth=$(norm(δ)), radius=0.1, location=($x, $y, $z), rotation=(0.0, $θ, $ϕ))""")
     end
 
     script = join(lines, "\n")
