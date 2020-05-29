@@ -5,11 +5,10 @@ using LinearAlgebra
 using SlaterKoster
 
 import SlaterKoster: SlaterKosterTable, hamiltonian
-import AbstractAtoms: chemical_symbols, atomic_positions
 
 export @Orbital_str, @orbital_str,
     chemicalpotential, hamiltonian, makeaxes, molecularorbitals, overlap,
-    selfenergy, slaterkoster, vibrationalcoupling
+    selfenergy, slaterkoster, total_energy, vibrationalcoupling
 
 struct Orbital{N,L,M} end
 macro Orbital_str(str::String)
@@ -256,6 +255,11 @@ function chemicalpotential(mol::Molecule, levels, oxidation=0)
 end
 
 bond_length(bond::Bond) = norm(position(bond.atom2) - position(bond.atom1))
+
+function total_energy(mol::Molecule, levels; oxidation = 0)
+    n = valencecount(mol, oxidation)
+    return sum(i -> real(levels[i]), 1:ceil(Int, n/2))
+end
 
 ##################################################
 # Hamiltonians
