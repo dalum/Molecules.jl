@@ -4,7 +4,7 @@ struct UnitCell
     bonds::Set{Bond}
 end
 
-function hamiltonian(T::Type, skt::SlaterKosterTable, uc::UnitCell)
+function hamiltonian(T::Type, f, uc::UnitCell)
     mol = uc.unit
     mol′ = uc.nextunit
     N = countorbitals(mol)
@@ -20,13 +20,13 @@ function hamiltonian(T::Type, skt::SlaterKosterTable, uc::UnitCell)
             Nj = countorbitals(atom2)
 
             if atom1 === atom2
-                H0[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, skt, atom1)
+                H0[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, f, atom1)
             elseif Bond(atom1, atom2) in mol.bonds
-                H0[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, skt, atom1, atom2)
+                H0[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, f, atom1, atom2)
             end
 
             if Bond(atom1, atom2′) in uc.bonds
-                t1[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, skt, atom1, atom2′)
+                t1[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, f, atom1, atom2′)
             end
 
             j += Nj
@@ -37,7 +37,7 @@ function hamiltonian(T::Type, skt::SlaterKosterTable, uc::UnitCell)
     return H0, t1
 end
 
-function overlap(T::Type, skt::SlaterKosterTable, uc::UnitCell)
+function overlap(T::Type, f, uc::UnitCell)
     mol = uc.unit
     mol′ = uc.nextunit
     N = countorbitals(mol)
@@ -53,13 +53,13 @@ function overlap(T::Type, skt::SlaterKosterTable, uc::UnitCell)
             Nj = countorbitals(atom2)
 
             if atom1 === atom2
-                S0[i:i+Ni-1, j:j+Nj-1] += overlap(T, skt, atom1)
+                S0[i:i+Ni-1, j:j+Nj-1] += overlap(T, f, atom1)
             elseif Bond(atom1, atom2) in mol.bonds
-                S0[i:i+Ni-1, j:j+Nj-1] += overlap(T, skt, atom1, atom2)
+                S0[i:i+Ni-1, j:j+Nj-1] += overlap(T, f, atom1, atom2)
             end
 
             if Bond(atom1, atom2′) in uc.bonds
-                S1[i:i+Ni-1, j:j+Nj-1] += overlap(T, skt, atom1, atom2′)
+                S1[i:i+Ni-1, j:j+Nj-1] += overlap(T, f, atom1, atom2′)
             end
 
             j += Nj

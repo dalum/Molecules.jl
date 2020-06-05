@@ -3,28 +3,29 @@
 ##################################################
 
 """
-    hamiltonian(x)
+    hamiltonian([T::Type], f, args...; kwargs...)
 
-Construct the matrix corresponding to the hamiltonian operator of `x`,
-where `x` is an atom, bond or molecule.  For bonds, this will compute
-the overlap integrals using the Slater-Koster scheme, for atoms, it
-will return a diagonal matrix with the onsite energies of the
-orbitals.
+Construct the matrix corresponding to the hamiltonian operator of an
+atom, bond or molecule.  `f` is a function that accepts the atom types
+and distances between the atoms to compute the hamiltonian matrix
+element.
 
 """
-function hamiltonian(T::Type, skt::SlaterKosterTable, atom::Atom; electric_field=(x, y, z) -> 0.0, kwargs...)
+hamiltonian(f, args...; kwargs...) = hamiltonian(Complex{Float64}, f, args...; kwargs...)
+
+function hamiltonian(T::Type, f, atom::Atom; electric_field=(x, y, z) -> 0.0, kwargs...)
     N = countorbitals(atom)
-    f = electric_field(position(atom)...)
+    V = electric_field(position(atom)...)
     #f = 0
     H = fill(zero(T), N, N)
     U = localbasis(atom)
     for (i, s1) in enumerate(atom.orbitals)
-        H[i,i] += SlaterKoster.hamiltonian(skt, chemical_symbol(atom) => shortform(s1))
+        H[i,i] += f(chemical_symbol(atom) => shortform(s1))
     end
-    return U'H*U - I*f
+    return U'H*U - I*V
 end
 
-function hamiltonian(T::Type, skt::SlaterKosterTable, atom1::Atom, atom2::Atom; fixed_distance=nothing, kwargs...)
+function hamiltonian(T::Type, f, atom1::Atom, atom2::Atom; fixed_distance=nothing, kwargs...)
     N1 = countorbitals(atom1)
     N2 = countorbitals(atom2)
     U1 = localbasis(atom1)
@@ -38,12 +39,12 @@ function hamiltonian(T::Type, skt::SlaterKosterTable, atom1::Atom, atom2::Atom; 
     end
 
     for (j, s2) in enumerate(atom2.orbitals), (i, s1) in enumerate(atom1.orbitals)
-        H[i,j] += SlaterKoster.hamiltonian(skt, r, chemical_symbol(atom1) => shortform(s1), chemical_symbol(atom2) => shortform(s2))
+        H[i,j] += f(r, chemical_symbol(atom1) => shortform(s1), chemical_symbol(atom2) => shortform(s2))
     end
     return U1'H*U2
 end
 
-function hamiltonian(T::Type, skt::SlaterKosterTable, mol::Molecule; kwargs...)
+function hamiltonian(T::Type, f, mol::Molecule; kwargs...)
     N = countorbitals(mol)
     H = fill(zero(T), N, N)
 
@@ -54,9 +55,9 @@ function hamiltonian(T::Type, skt::SlaterKosterTable, mol::Molecule; kwargs...)
         for atom2 in mol.atoms
             Nj = countorbitals(atom2)
             if atom1 === atom2
-                H[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, skt, atom1; kwargs...)
+                H[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, f, atom1; kwargs...)
             elseif Bond(atom1, atom2) in mol.bonds
-                H[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, skt, atom1, atom2; kwargs...)
+                H[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, f, atom1, atom2; kwargs...)
             end
             j += Nj
         end
@@ -65,7 +66,7 @@ function hamiltonian(T::Type, skt::SlaterKosterTable, mol::Molecule; kwargs...)
     return H
 end
 
-function hamiltonian(T::Type, skt::SlaterKosterTable, mol1::Molecule, mol2::Molecule, bonds::Set{<:Bond}; kwargs...)
+function hamiltonian(T::Type, f, mol1::Molecule, mol2::Molecule, bonds::Set{<:Bond}; kwargs...)
     N1 = countorbitals(mol1)
     N2 = countorbitals(mol2)
     H = fill(zero(T), N1, N2)
@@ -77,7 +78,7 @@ function hamiltonian(T::Type, skt::SlaterKosterTable, mol1::Molecule, mol2::Mole
         for atom2 in mol2.atoms
             Nj = countorbitals(atom2)
             if Bond(atom1, atom2) in bonds
-                H[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, skt, atom1, atom2; kwargs...)
+                H[i:i+Ni-1, j:j+Nj-1] += hamiltonian(T, f, atom1, atom2; kwargs...)
             end
             j += Nj
         end

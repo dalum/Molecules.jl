@@ -2,9 +2,6 @@ module Molecules
 
 using ForwardDiff
 using LinearAlgebra
-using SlaterKoster
-
-import SlaterKoster: SlaterKosterTable, hamiltonian
 
 export @Orbital_str, @orbital_str,
     chemicalpotential, hamiltonian, makeaxes, molecularorbitals, overlap,
@@ -198,12 +195,12 @@ function Base.Vector{T}(mol::Molecule, n::Integer, s::Integer) where {T}
     return Vector{T}(mol, atom, orbital)
 end
 
-function centre_of_mass(skt::SlaterKosterTable, mol::Molecule)
-    return sum(mass(skt, atom)*position(atom) for atom in mol) / mass(skt, mol)
+function centre_of_mass(f, mol::Molecule)
+    return sum(mass(f, atom)*position(atom) for atom in mol) / mass(f, mol)
 end
 
-function balance_position!(skt::SlaterKosterTable, mol::Molecule)
-    p0 = centre_of_mass(skt, mol)
+function balance_position!(f, mol::Molecule)
+    p0 = centre_of_mass(f, mol)
     for atom in mol.atoms
         atom.position -= p0
     end
@@ -222,8 +219,8 @@ chemical_symbols(atoms::AbstractVector{<:Atom}) = chemical_symbol.(atoms)
 countorbitals(atom::Atom)::Int = length(atom.orbitals)
 countorbitals(mol::Molecule)::Int = sum(map(countorbitals, mol.atoms))
 
-mass(skt::SlaterKosterTable, atom::Atom) = SlaterKoster.mass(skt, chemical_symbol(atom))
-mass(skt::SlaterKosterTable, mol::Molecule) = sum(map(atom -> mass(skt, atom), mol))
+mass(f, atom::Atom) = f(chemical_symbol(atom))
+mass(f, mol::Molecule) = sum(map(atom -> mass(f, atom), mol))
 
 function electronvalence(atom::Atom)
     !ismissing(atom.valence) && return atom.valence
@@ -509,9 +506,9 @@ function selfenergy(l::Lead, H::AbstractMatrix, t::AbstractMatrix)
     end
 end
 
-function selfenergy(T, skt::SlaterKosterTable, l::Lead, mol::Molecule, bonds::Set{<:Bond}; f=identity)
-    t = f.(hamiltonian(T, skt, l.mol, mol, bonds))
-    H = f.(hamiltonian(T, skt, l.mol))
+function selfenergy(T, f, l::Lead, mol::Molecule, bonds::Set{<:Bond})
+    t = hamiltonian(T, f, l.mol, mol, bonds)
+    H = hamiltonian(T, f, l.mol)
     return selfenergy(l, H, t)
 end
 
