@@ -18,7 +18,7 @@ function slaterkoster(r, a1, a2; kwargs...)
     s(x) = kwargs[Symbol(first(a1), first(a2), "_", first(string(last(a1))), first(string(last(a2))), x)]
 
     if (o1, o2) == (:s, :s)
-        return kwargs[s(:σ)]
+        return s(:σ)
     end
 
     for (i, x) in [(1, :x), (2, :y), (3, :z)]

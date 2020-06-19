@@ -7,6 +7,14 @@ export @Orbital_str, @orbital_str,
     chemicalpotential, hamiltonian, makeaxes, molecularorbitals, overlap,
     selfenergy, slaterkoster, total_energy, vibrationalcoupling
 
+const ⊗ = kron
+const σ0 = I(2)
+const σ = (
+    x = [0.0 1.0; 1.0 0.0],
+    y = [0.0 -1.0im; 1.0im 0.0],
+    z = [1.0 0.0; 0.0 -1.0]
+)
+
 struct Orbital{N,L,M} end
 macro Orbital_str(str::String)
     reg = r"^([0-9\*]+)([a-zA-Z]+)(?:_(?:\{(.+)\}|([a-zA-Z\*]+)))?$"
@@ -104,17 +112,11 @@ mutable struct Molecule
     bonds::Set{Bond}
 end
 
-Molecule(atoms, bonds) = Molecule(
+Molecule(atoms=Vector{Atom}(), bonds=Set{Bond}()) = Molecule(
     [0., 0., 0.],
     makeaxes(0., 0.),
     collect(Atom, atoms),
     Set{Bond}(bonds))
-
-Molecule() = Molecule(
-    [0., 0., 0.],
-    makeaxes(0., 0.),
-    Vector{Atom}(),
-    Set{Bond}())
 
 function Base.:(==)(mol1::Molecule, mol2::Molecule)
     return (
@@ -482,40 +484,6 @@ function vibrationalcoupling(mol::Molecule, atom::Atom, ω0, dr)
     H′ = hamiltonian(mol)
     atom.position -= dr
     return (H′ - H0) / norm(dr) * √(1 / (2 * m * ω0))
-end
-
-##################################################
-# Leads
-##################################################
-
-"""
-    Lead{N}
-
-A lead with `N` channels.
-
-"""
-struct Lead{T}
-    mol::Molecule
-    Γ::T
-end
-
-"""
-    selfenergy(l, mol)
-
-Return the self-energy to `mol` from the lead, `l`.
-"""
-
-function selfenergy(l::Lead, H::AbstractMatrix, t::AbstractMatrix)
-    return function (E)
-        G = inv(E*I - H + I*im*l.Γ/2)
-        return t'G*t
-    end
-end
-
-function selfenergy(T, f, l::Lead, mol::Molecule, bonds::Set{<:Bond})
-    t = hamiltonian(T, f, l.mol, mol, bonds)
-    H = hamiltonian(T, f, l.mol)
-    return selfenergy(l, H, t)
 end
 
 ##################################################
